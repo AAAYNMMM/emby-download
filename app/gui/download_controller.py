@@ -20,7 +20,10 @@ from app.downloader.task_store import (
     DownloadTask,
 )
 from app.gui.workers import DownloadItemWorker
+from app.utils.logger import get_logger
 from app.utils.timing import timed_step, timing_event
+
+_logger = get_logger()
 
 
 class DownloadController(QObject):
@@ -227,11 +230,11 @@ class DownloadController(QObject):
         # thread.started emits from the new thread -> DirectConnection on the new thread
         thread.started.connect(worker.run)
 
+        # worker finished/error -> thread.quit (queued), _on_finished/_on_error (queued)
+        # -> thread.finished -> _cleanup_thread (pops active, deleteLater, pumps queue)
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        worker.error.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda tid=task_id: self._cleanup_thread(tid))
 
         self._active[task_id] = {"thread": thread, "worker": worker, "paused": False}
         self.log_message.emit("INFO", f"Task {task_id} starting for item {db_task.item_id}.")
@@ -272,12 +275,16 @@ class DownloadController(QObject):
             return ""
 
         # Clean up old entry if still lingering
-        old = self._active.pop(task_id, None)
+        # Keep ref to old thread until it has stopped; pop from _active now
+        # but call deleteLater after wait so the C++ object is not leaked.
+        old = self._active.pop(task_id, None) if task_id not in self._cancelling else self._active.get(task_id)
         if old is not None:
             if old["thread"].isRunning():
                 old["worker"].request_pause()
                 old["thread"].quit()
                 old["thread"].wait(2000)
+            old["worker"].deleteLater()
+            old["thread"].deleteLater()
 
         self._task_download_dirs[task_id] = download_dir
         self._resume_tasks.add(task_id)
@@ -333,14 +340,19 @@ class DownloadController(QObject):
                 self.log_message.emit("INFO", f"Pause requested for task {task_id} (shutdown).")
 
     def shutdown(self):
-        """Stop all downloads and quit threads. Called on app close."""
+        """Stop all downloads and quit threads. Called on app close.
+
+        Does NOT clear _active (which would drop the last Python ref to
+        running QThread objects).  Lets _cleanup_thread cleanup via
+        thread.finished instead.  If the thread did not stop within
+        wait(3000), the ref stays alive -- Qt cleans up at app exit.
+        """
         self.log_message.emit("INFO", "Shutting down download controller...")
         for task_id, entry in list(self._active.items()):
             if entry["thread"].isRunning():
                 entry["worker"].request_pause()
                 entry["thread"].quit()
                 entry["thread"].wait(3000)
-        self._active.clear()
         self._pending_queue.clear()
         self._task_download_dirs.clear()
         self._resume_tasks.clear()
@@ -351,6 +363,9 @@ class DownloadController(QObject):
     # ------------------------------------------------------------------
 
     def _on_prepared(self, task_id: str, data: dict):
+        if task_id not in self._active:
+            _logger.warning(f"ignored stale prepared task_id={task_id}")
+            return
         """Worker has prepared the download (URL resolved, task updated)."""
         new_task_id = data.get("task_id", task_id)
         if new_task_id != task_id:
@@ -362,6 +377,9 @@ class DownloadController(QObject):
         self.log_message.emit("INFO", f"Task {task_id} prepared -> {dest}")
 
     def _on_download_started(self, task_id: str, data: dict):
+        if task_id not in self._active:
+            _logger.warning(f"ignored stale download_started task_id={task_id}")
+            return
         """Worker is entering the GET/download phase."""
         new_task_id = data.get("task_id", task_id)
         if new_task_id != task_id:
@@ -374,6 +392,9 @@ class DownloadController(QObject):
 
     def _on_progress(self, task_id: str, downloaded: int, total, speed: float):
         """Store progress in memory. The MainWindow flush timer reads _latest_progress."""
+        if task_id not in self._active:
+            _logger.warning(f"ignored stale progress task_id={task_id}")
+            return
         if task_id not in self._first_progress_seen:
             self._first_progress_seen.add(task_id)
             timing_event("first progress received", task_id=task_id, downloaded=downloaded, total=total)
@@ -382,29 +403,57 @@ class DownloadController(QObject):
         self.progress.emit(task_id, downloaded, total, speed)
 
 
-    def _on_finished(self, task_id: str, data: dict):
-        """Worker completed (success, paused, or failed)."""
-        result = data.get("result")
-        entry = self._active.pop(task_id, None)
+    def _request_thread_quit(self, task_id: str):
+        """Request a running thread to quit.  Actual cleanup (_active.pop,
+        deleteLater, _pump_queue) happens in _cleanup_thread when the
+        thread's finished signal fires, so the Python ref stays alive.
+        """
+        entry = self._active.get(task_id)
         if entry is not None and entry["thread"].isRunning():
+            _logger.info(f"thread quit requested task_id={task_id}")
             entry["thread"].quit()
+
+    def _cleanup_thread(self, task_id: str):
+        """Called via thread.finished.  Safe to pop from _active and
+        schedule deleteLater because the thread has fully stopped.
+        """
+        entry = self._active.pop(task_id, None)
+        if entry is None:
+            return
+        _logger.info(f"cleanup active thread task_id={task_id}")
+        worker = entry["worker"]
+        thread = entry["thread"]
+        worker.deleteLater()
+        thread.deleteLater()
+        _logger.info(f"thread finished task_id={task_id}")
+
+        # Only now pump the queue -- the thread is truly done
+        self._pump_queue()
+
+    def _on_finished(self, task_id: str, data: dict):
+        """Worker completed (success, paused, or failed).
+
+        Updates DB and emits signals.  Does NOT pop from _active or call
+        _pump_queue here - those happen in _cleanup_thread after
+        thread.finished, so the thread reference stays alive until the
+        thread has actually stopped.
+        """
+        result = data.get("result")
 
         if result is None:
             update_task(task_id, status="failed", error_message="Unknown result from worker.")
             self.status_changed.emit(task_id, "failed")
             self.error.emit(task_id, "Unknown result from worker.")
-            self._pump_queue()
+            self._request_thread_quit(task_id)
             return
 
         if result.success:
-            # Use result.total_bytes (may be None) or fall back to downloaded_bytes
             final_bytes = result.total_bytes if result.total_bytes else result.downloaded_bytes
             update_task(task_id, status="completed", downloaded_bytes=final_bytes)
             self.status_changed.emit(task_id, "completed")
             self.finished_signal.emit(task_id, result.file_path)
             self.log_message.emit("OK", f"Task {task_id} completed: {result.file_path}")
         elif result.status == DownloadStatus.PAUSED:
-            # Check if this was a cancel request
             if task_id in self._cancelling:
                 self._cancelling.discard(task_id)
                 update_task(task_id, status="cancelled",
@@ -432,7 +481,7 @@ class DownloadController(QObject):
         self._task_download_dirs.pop(task_id, None)
         self._resume_tasks.discard(task_id)
         self._first_progress_seen.discard(task_id)
-        self._pump_queue()
+        self._request_thread_quit(task_id)
     def stop_all(self):
         """Stop all active download tasks."""
         for task_id in list(self._active.keys()):
@@ -447,16 +496,13 @@ class DownloadController(QObject):
             if thread.isRunning():
                 thread.quit()
                 thread.wait(2000)
-        self._active.clear()
+        # Don't clear _active -- _cleanup_thread pops from thread.finished.
+        # If threads did not stop within wait(2000), keep refs alive.
         self._pending_queue.clear()
 
 
     def _on_error(self, task_id: str, message: str):
-        """Worker reported an error."""
-        entry = self._active.pop(task_id, None)
-        if entry is not None and entry["thread"].isRunning():
-            entry["thread"].quit()
-
+        """Worker reported an error.  Deferred cleanup via _request_thread_quit."""
         update_task(task_id, status="failed", error_message=message)
         self.status_changed.emit(task_id, "failed")
         self.error.emit(task_id, message)
@@ -464,4 +510,4 @@ class DownloadController(QObject):
         self._task_download_dirs.pop(task_id, None)
         self._resume_tasks.discard(task_id)
         self._first_progress_seen.discard(task_id)
-        self._pump_queue()
+        self._request_thread_quit(task_id)

@@ -116,7 +116,12 @@ async def download_file(
             return result
 
     # --- Phase 1: HEAD request to get total size ---
-    timeout_obj = aiohttp.ClientTimeout(total=timeout, connect=timeout)
+    timeout_obj = aiohttp.ClientTimeout(
+        total=None,
+        connect=timeout,
+        sock_connect=timeout,
+        sock_read=timeout,
+    )
     connector = aiohttp.TCPConnector(limit_per_host=1)
     downloaded = 0
 
@@ -236,7 +241,8 @@ async def _download_with_range(
     last_report_time = start_time
     downloaded = existing_size
     retries = 0
-    file_mode = "ab" if existing_size > 0 else "wb"
+    # If resume=False, always start fresh; if resume=True and part exists, append
+    file_mode = "ab" if (resume and existing_size > 0) else "wb"
     range_not_supported = False
     get_started_logged = False
 
@@ -257,11 +263,12 @@ async def _download_with_range(
             # Build Range header for resume
             headers = {}
             request_range = False
-            if resume and total_size is not None and downloaded > 0 and not range_not_supported:
-                end_byte = downloaded + chunk_size - 1
-                if total_size:
-                    end_byte = min(end_byte, total_size - 1)
-                headers["Range"] = f"bytes={downloaded}-{end_byte}"
+            # Always use Range if we have partial data, regardless of resume flag.
+            # After a mid-download error, downloaded > 0; we must continue from the
+            # correct byte to avoid appending duplicates.  Open-ended Range works
+            # even when total_size is unknown.
+            if downloaded > 0 and not range_not_supported:
+                headers["Range"] = f"bytes={downloaded}-"
                 request_range = True
 
             try:
@@ -281,12 +288,25 @@ async def _download_with_range(
                             os.path.getsize(part_path) if os.path.exists(part_path)
                             else downloaded
                         )
-                        if total_size is not None and current_part_size >= total_size:
+                        if total_size is not None and current_part_size == total_size:
                             _logger.info(
                                 f"416 but part file is complete "
                                 f"({current_part_size} >= {total_size}) - marking complete"
                             )
                             break
+                        elif total_size is not None and current_part_size > total_size:
+                            _logger.error(
+                                f"Part file {current_part_size} bytes > expected {total_size} bytes - "
+                                f"file is corrupt. Delete .part and retry."
+                            )
+                            result.error_message = (
+                                f"Part file {current_part_size} bytes > expected total {total_size} bytes. "
+                                f"Delete .part and retry."
+                            )
+                            result.downloaded_bytes = downloaded
+                            result.total_bytes = total_size
+                            result.status = DownloadStatus.FAILED
+                            return downloaded
                         else:
                             result.error_message = (
                                 f"HTTP 416: Range not satisfiable at byte {downloaded}"
@@ -401,16 +421,28 @@ async def _download_with_range(
                         break
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                _logger.warning(f"Download error at byte {downloaded}: {e}")
+                error_text = str(e).strip() or type(e).__name__
+                _logger.warning(f"Download error at byte {downloaded}: {error_text}")
                 retries += 1
                 if retries > retry_count:
                     result.error_message = (
-                        f"Download failed after {retry_count} retries: {e}"
+                        f"Download failed after {retry_count} retries: {error_text}"
                     )
                     result.downloaded_bytes = downloaded
                     result.total_bytes = total_size
                     result.status = DownloadStatus.FAILED
                     return downloaded
+                # If server does not support Range and we have partial data,
+                # truncate .part to avoid appending full-GET 200 content
+                # on top of existing bytes.
+                if range_not_supported and downloaded > 0:
+                    _logger.warning(
+                        "Server does not support Range - truncating .part "
+                        "and restarting from byte 0"
+                    )
+                    downloaded = 0
+                    await f.close()
+                    f = await aiofiles.open(part_path, "wb")
                 await asyncio.sleep(retry_delay * (2 ** (retries - 1)))
 
     return downloaded

@@ -21,6 +21,11 @@ async def download_stream(
     """
     Download via Emby's /Videos/{id}/stream API (Direct Stream).
 
+    IMPORTANT: no_range=True is forced because stream URLs create a
+    new transcode/remux session per Range request, so byte offsets
+    between Range segments do not align.  The file must be downloaded
+    in one continuous HTTP response.
+
     Args:
         url: Full stream URL from get_stream_url().
         dest_path: Local path to save the file.
@@ -39,6 +44,7 @@ async def download_stream(
         dest_path=dest_path,
         chunk_size=chunk_size,
         resume=resume,
+        no_range=True,
         retry_count=retry_count,
         retry_delay=retry_delay,
         timeout=timeout,

@@ -66,6 +66,7 @@ async def download_file(
     dest_path: str,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     resume: bool = False,
+    no_range: bool = False,
     retry_count: int = 3,
     retry_delay: int = 5,
     timeout: int = 30,
@@ -134,6 +135,7 @@ async def download_file(
                 total_size=total_size,
                 chunk_size=chunk_size,
                 resume=resume,
+                no_range=no_range,
                 retry_count=retry_count,
                 retry_delay=retry_delay,
                 timeout=timeout,
@@ -211,6 +213,7 @@ async def _download_with_range(
     total_size: Optional[int],
     chunk_size: int,
     resume: bool,
+    no_range: bool = False,
     retry_count: int,
     retry_delay: int,
     timeout: int,
@@ -252,7 +255,7 @@ async def _download_with_range(
             # Build Range header for resume
             headers = {}
             request_range = False
-            if resume and downloaded > 0 and not range_not_supported:
+            if resume and not no_range and downloaded > 0 and not range_not_supported:
                 end_byte = downloaded + chunk_size - 1
                 if total_size:
                     end_byte = min(end_byte, total_size - 1)

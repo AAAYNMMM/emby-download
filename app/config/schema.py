@@ -26,7 +26,7 @@ class EmbyConfig:
     chunk_size_mb: int = 8
     retry_count: int = 3
     retry_delay_seconds: int = 5
-    timeout_seconds: int = 30
+    timeout_seconds: int = 600  # 10 minutes (was 30s, too short for large files)
     max_concurrent_downloads: int = 1
 
     # Naming

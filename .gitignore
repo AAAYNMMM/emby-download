@@ -21,18 +21,35 @@ env/
 *.swo
 *~
 
-# EmbyD specific
+# EmbyD config / data
 *.part
 downloads/
 config.json
 embyd_config.json
 tasks.db
 tasks.db-*
+*.db
+*.sqlite
+*.sqlite3
+embyd_backend.pid
+embyd_backend.port
+*.pid
+*.port
 *.env
 
 # Logs
 *.log
 logs/
+
+# Tests / temp
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+full_output.txt
+test_output.txt
+test_result.txt
+pytest_result.txt
+pytest_full_result.txt
 
 # OS
 Thumbs.db
@@ -41,3 +58,10 @@ Thumbs.db
 # Environment local overrides (contains real credentials)
 .env.local
 .env.*.local
+
+# Backup
+embyD_cleanup_backup/
+
+# Archive
+*.zip
+

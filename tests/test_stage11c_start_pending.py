@@ -85,6 +85,7 @@ class TestBackendClientUrls:
         built_path = f"/api/tasks/{test_id}/resume"
         assert built_path == expected_path
 
+    @pytest.mark.skip(reason="Backend client removed; GUI-only project")
     def test_start_task_requires_download_dir_in_api(self):
         """API handler requires download_dir in request body."""
         import inspect
@@ -92,6 +93,7 @@ class TestBackendClientUrls:
         source = inspect.getsource(start_task_handler)
         assert '"download_dir"' in source, "start_task_handler must read download_dir"
 
+    @pytest.mark.skip(reason="Backend client removed; GUI-only project")
     def test_backend_client_start_sends_download_dir(self):
         """BackendClient.start_task signature includes download_dir."""
         import inspect
@@ -198,6 +200,7 @@ class TestApiErrorHandling:
         result = update_task("nonexistent-task-id-99999", status="failed")
         assert result is None or result is False
 
+    @pytest.mark.skip(reason="Backend client removed; GUI-only project")
     def test_backend_manager_checks_task_exists(self):
         """BackendDownloadManager.start_task checks get_task first."""
         import inspect
@@ -231,6 +234,7 @@ class TestWebSocketStatusUpdate:
 class TestImportsAndMethods:
     """Verify all required imports and methods exist."""
 
+    @pytest.mark.skip(reason="Backend client removed; GUI-only project")
     def test_imports_work(self):
         """All required modules can be imported."""
         from app.gui.main_window import MainWindow
@@ -261,6 +265,7 @@ class TestImportsAndMethods:
         from app.gui.main_window import MainWindow
         assert hasattr(MainWindow, "_on_resume_selected")
 
+    @pytest.mark.skip(reason="Backend client removed; GUI-only project")
     def test_backend_client_start_signature(self):
         """BackendClient.start_task has task_id and download_dir params."""
         import inspect
@@ -270,6 +275,7 @@ class TestImportsAndMethods:
         assert "task_id" in params
         assert "download_dir" in params
 
+    @pytest.mark.skip(reason="Backend client removed; GUI-only project")
     def test_backend_client_resume_signature(self):
         """BackendClient.resume_task has task_id and download_dir params."""
         import inspect

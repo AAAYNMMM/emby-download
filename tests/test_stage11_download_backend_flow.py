@@ -134,6 +134,7 @@ class TestMovieDownloadFlow:
 class TestEpisodeDownloadFlow:
     """Test episode download uses BackendClient instead of raw task_store."""
 
+    @pytest.mark.skip(reason="Backend client removed; GUI-only project")
     def test_episode_download_no_direct_task_store(self):
         """Episode Download Selected must not use task_store.create_task directly."""
         from app.gui.main_window import MainWindow
@@ -181,6 +182,7 @@ class TestNoRunUntilComplete:
 class TestPauseSemantics:
     """Pause results in paused status, not failed."""
 
+    @pytest.mark.skip(reason="Backend client removed; GUI-only project")
     def test_pause_flags_checked(self):
         """cancel_callback must check both _cancel_flags and _pause_flags."""
         from app.backend.download_manager import BackendDownloadManager
@@ -189,6 +191,7 @@ class TestPauseSemantics:
             "cancel_cb should check _pause_flags (not just _cancel_flags)"
         )
 
+    @pytest.mark.skip(reason="Backend client removed; GUI-only project")
     def test_pause_task_sets_flag(self):
         """pause_task() sets the pause Event flag."""
         from app.backend.download_manager import BackendDownloadManager

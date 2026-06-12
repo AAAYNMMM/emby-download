@@ -142,6 +142,10 @@ async def download_file(
                 result=result,
             )
 
+            # Use total discovered from actual response headers (more authoritative than HEAD)
+            if result.total_bytes is not None:
+                total_size = result.total_bytes
+
             # Check for early termination (pause, cancel, or explicit failure)
             if result.status == DownloadStatus.PAUSED:
                 result.downloaded_bytes = downloaded
@@ -198,7 +202,8 @@ async def download_file(
         return result
     except Exception as e:
         _logger.error(f"Download failed unexpectedly: {e}", exc_info=True)
-        result.error_message = str(e)
+        error_text = str(e).strip() or repr(e) or type(e).__name__
+        result.error_message = error_text
         result.status = DownloadStatus.FAILED
         return result
 
@@ -307,6 +312,7 @@ async def _download_with_range(
                         if cl:
                             try:
                                 total_size = int(cl)
+                                result.total_bytes = int(cl)
                             except ValueError:
                                 pass
 
@@ -333,6 +339,7 @@ async def _download_with_range(
                         cr_start, cr_end, cr_total = parse_content_range(content_range)
                         if cr_total is not None and cr_total > 0:
                             total_size = cr_total
+                            result.total_bytes = cr_total
 
                     # Try Content-Length as fallback for total
                     if total_size is None:
@@ -342,6 +349,7 @@ async def _download_with_range(
                                 parsed = int(cl)
                                 if response.status == 200:
                                     total_size = parsed
+                                    result.total_bytes = parsed
                                 # For 206, Content-Length is chunk size, not total;
                                 # Content-Range total is already set above.
                             except ValueError:
@@ -358,6 +366,7 @@ async def _download_with_range(
                                         f"Content-Length mismatch: HEAD={total_size}, GET={cl_int}"
                                     )
                                     total_size = cl_int
+                                    result.total_bytes = cl_int
                             except ValueError:
                                 pass
 

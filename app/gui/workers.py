@@ -83,7 +83,8 @@ class PingWorker(QObject):
         except requests.exceptions.Timeout:
             self.error.emit(f"Timeout connecting to {server_url}")
         except Exception as e:
-            self.error.emit(str(e))
+            error_text = str(e).strip() or repr(e) or type(e).__name__
+            self.error.emit(error_text)
 
 
 class WhoamiWorker(QObject):

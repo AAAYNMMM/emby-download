@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+*.spec
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# EmbyD specific
+*.part
+downloads/
+config.json
+embyd_config.json
+tasks.db
+tasks.db-*
+*.env
+
+# Logs
+*.log
+logs/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Environment local overrides (contains real credentials)
+.env.local
+.env.*.local

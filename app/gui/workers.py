@@ -233,15 +233,23 @@ class TaskListWorker(QObject):
             self.error.emit(str(e))
 
 
-class DownloadWorker(QObject):
-    """Download a movie file with progress reporting."""
-    progress = Signal(int, int, float)  # downloaded, total, speed_bps
-    finished = Signal(object)           # DownloadResult
-    error = Signal(str)
-
     def __init__(self):
         super().__init__()
         self._pause_requested = False
+        self._current_worker = None
+        super().__init__()
+        self._pause_requested = False
+
+        self._item_id: str = ""
+        self._server_url: str = ""
+        self._token: str = ""
+        self._download_dir: str = ""
+        self._chunk_size: int = 8388608
+        self._retry_count: int = 3
+        self._retry_delay: int = 5
+        self._timeout: int = 30
+        self._resume: bool = False
+        self._task_id: str = ""
         self._current_worker = None
 
     def request_pause(self):
@@ -313,24 +321,11 @@ class DownloadItemWorker(QObject):
     def request_pause(self):
         self._pause_requested = True
 
-    def run(
-        self,
-        item_id: str,
-        server_url: str,
-        token: str,
-        download_dir: str,
-        chunk_size: int = 8 * 1024 * 1024,
-        retry_count: int = 3,
-        retry_delay: int = 5,
-        timeout: int = 30,
-        resume: bool = False,
-        task_id: Optional[str] = None,
-        media_source_id: str = "",
-    ):
+    def run(self):
         import asyncio
         from app.core.download_preview import build_download_preview
         from app.core.emby_api import EmbyApiClient
-        from app.core.playback_info import parse_media_sources, select_best_source
+        from app.core.playback_info import parse_media_sources, select_best_source, find_source_by_id
         from app.core.download_capability import check_download_capability, DownloadMethod
         from app.downloader.direct_download import download_direct
         from app.downloader.stream_download import download_stream
@@ -338,6 +333,20 @@ class DownloadItemWorker(QObject):
         from app.utils.timing import timed_step, timing_event
 
         self._pause_requested = False
+
+        item_id = self._item_id
+        server_url = self._server_url
+        token = self._token
+        download_dir = self._download_dir
+        chunk_size = self._chunk_size
+        retry_count = self._retry_count
+        retry_delay = self._retry_delay
+        timeout = self._timeout
+        resume = self._resume
+        task_id = self._task_id
+        media_source_id = self._media_source_id
+
+        timing_event("worker run entered", item_id=item_id, task_id=task_id)
 
         try:
             with timed_step("build_download_preview", item_id=item_id, task_id=task_id):

@@ -332,7 +332,9 @@ class MainWindow(QMainWindow):
         """Run a worker in a background thread."""
         thread = QThread()
         worker.moveToThread(thread)
-        thread.started.connect(start_fn)
+        # Use DirectConnection so the closure runs on the new thread,
+        # not queued to the main thread event loop
+        thread.started.connect(start_fn, Qt.ConnectionType.DirectConnection)
         if hasattr(worker, "finished"):
             worker.finished.connect(thread.quit)
         if hasattr(worker, "error"):

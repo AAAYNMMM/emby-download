@@ -55,6 +55,7 @@ class DownloadController(QObject):
         self._resume_tasks: set[str] = set()
         self._cancelling: set[str] = set()
         self._first_progress_seen: set[str] = set()
+        self._latest_progress: dict[str, tuple] = {}
 
 
     # ------------------------------------------------------------------
@@ -197,6 +198,19 @@ class DownloadController(QObject):
         self.status_changed.emit(task_id, "preparing")
 
         worker = DownloadItemWorker()
+        # Set worker params BEFORE moveToThread so they are available on the new thread
+        worker._item_id = db_task.item_id
+        worker._server_url = self._config.server_url
+        worker._token = token
+        worker._download_dir = download_dir
+        worker._chunk_size = self._config.chunk_size_mb * 1024 * 1024
+        worker._retry_count = self._config.retry_count
+        worker._retry_delay = self._config.retry_delay_seconds
+        worker._timeout = self._config.timeout_seconds
+        worker._resume = (task_id in self._resume_tasks)
+        worker._task_id = task_id
+        worker._media_source_id = db_task.media_source_id
+
         timing_event("thread created", item_id=db_task.item_id, task_id=task_id)
         thread = QThread()
         worker.moveToThread(thread)
@@ -209,30 +223,9 @@ class DownloadController(QObject):
         worker.finished.connect(lambda data, tid=task_id: self._on_finished(tid, data), Qt.QueuedConnection)
         worker.error.connect(lambda msg, tid=task_id: self._on_error(tid, msg), Qt.QueuedConnection)
 
-        def _run_worker(
-            tid=task_id,
-            item_id=db_task.item_id,
-            dl_dir=download_dir,
-            resume=(task_id in self._resume_tasks),
-            ms_id=db_task.media_source_id,
-            w=worker,
-        ):
-            timing_event("worker run entered", item_id=item_id, task_id=tid)
-            w.run(
-                item_id=item_id,
-                server_url=self._config.server_url,
-                token=token,
-                download_dir=dl_dir,
-                chunk_size=self._config.chunk_size_mb * 1024 * 1024,
-                retry_count=self._config.retry_count,
-                retry_delay=self._config.retry_delay_seconds,
-                timeout=self._config.timeout_seconds,
-                resume=resume,
-                task_id=tid,
-                media_source_id=ms_id,
-            )
-
-        thread.started.connect(_run_worker)
+        # worker.run is a QObject method with thread affinity to the new thread;
+        # thread.started emits from the new thread -> DirectConnection on the new thread
+        thread.started.connect(worker.run)
 
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)

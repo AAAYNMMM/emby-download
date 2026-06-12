@@ -30,6 +30,51 @@ HIDDEN_IMPORTS = [
     "aiohttp", "aiofiles", "cryptography", "keyring",
 ]
 
+# PySide6 modules actually used by the app
+PYSIDE_MODULES = [
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+]
+
+# PySide6 modules NOT used — exclude to save ~150 MB
+PYSIDE_EXCLUDES = [
+    "PySide6.QtQml",
+    "PySide6.QtQuick",
+    "PySide6.QtQuickControls2",
+    "PySide6.QtQuickWidgets",
+    "PySide6.QtWebEngine",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets",
+    "PySide6.QtWebChannel",
+    "PySide6.QtBluetooth",
+    "PySide6.QtMultimedia",
+    "PySide6.QtMultimediaWidgets",
+    "PySide6.QtSvg",
+    "PySide6.QtSvgWidgets",
+    "PySide6.QtWebSockets",
+    "PySide6.QtTest",
+    "PySide6.QtOpenGL",
+    "PySide6.QtOpenGLWidgets",
+    "PySide6.QtConcurrent",
+    "PySide6.QtPositioning",
+    "PySide6.QtPrintSupport",
+    "PySide6.QtDBus",
+    "PySide6.QtSql",
+    "PySide6.QtXml",
+    "PySide6.QtHelp",
+    "PySide6.QtUiTools",
+    "PySide6.QtTextToSpeech",
+    "PySide6.QtSerialPort",
+    "PySide6.QtNfc",
+    "PySide6.Qt3DCore",
+    "PySide6.Qt3DRender",
+    "PySide6.Qt3DInput",
+    "PySide6.Qt3DAnimation",
+    "PySide6.Qt3DExtras",
+    "PySide6.Qt3DLogic",
+]
+
 
 def build_gui():
     print("=" * 60)
@@ -42,10 +87,19 @@ def build_gui():
         "--name", "embyd-gui",
         "--distpath", str(PROJECT_ROOT / "dist"),
         "--workpath", str(PROJECT_ROOT / "build"),
-        "--collect-all", "PySide6",
     ]
+
+    # Collect only the Qt modules we actually use
+    for mod in PYSIDE_MODULES:
+        cmd += ["--collect-all", mod]
+
+    # Exclude unused Qt modules to save ~150 MB
+    for mod in PYSIDE_EXCLUDES:
+        cmd += ["--exclude-module", mod]
+
     for mod in HIDDEN_IMPORTS:
         cmd += ["--hidden-import", mod]
+
     cmd += [str(PROJECT_ROOT / "app/gui/app.py")]
 
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")

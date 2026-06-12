@@ -1,0 +1,1 @@
+# Core module - Emby API client, auth, playback info, etc.

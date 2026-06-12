@@ -1,0 +1,1 @@
+# GUI module - PySide6 graphical interface (Stage 9)

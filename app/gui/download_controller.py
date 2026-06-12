@@ -437,10 +437,16 @@ class DownloadController(QObject):
         """Stop all active download tasks."""
         for task_id in list(self._active.keys()):
             self.cancel_task(task_id)
-        for task_id, entry in self._active.items():
-            if entry["thread"].isRunning():
-                entry["thread"].quit()
-                entry["thread"].wait(2000)
+        from shiboken6 import isValid
+        for task_id, entry in list(self._active.items()):
+            thread = entry.get("thread")
+            if thread is None:
+                continue
+            if not isValid(thread):
+                continue
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(2000)
         self._active.clear()
         self._pending_queue.clear()
 

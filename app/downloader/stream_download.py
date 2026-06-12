@@ -44,7 +44,6 @@ async def download_stream(
         dest_path=dest_path,
         chunk_size=chunk_size,
         resume=resume,
-        no_range=True,
         retry_count=retry_count,
         retry_delay=retry_delay,
         timeout=timeout,

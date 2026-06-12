@@ -66,7 +66,6 @@ async def download_file(
     dest_path: str,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     resume: bool = False,
-    no_range: bool = False,
     retry_count: int = 3,
     retry_delay: int = 5,
     timeout: int = 30,
@@ -124,7 +123,7 @@ async def download_file(
     try:
         async with aiohttp.ClientSession(timeout=timeout_obj, connector=connector) as session:
             with timed_step("HEAD download_file"):
-                total_size = await _get_file_size(session, url)
+                total_size, accept_ranges = await _get_file_info(session, url)
 
             # --- Phase 2: Download with range support ---
             downloaded = await _download_with_range(
@@ -135,7 +134,6 @@ async def download_file(
                 total_size=total_size,
                 chunk_size=chunk_size,
                 resume=resume,
-                no_range=no_range,
                 retry_count=retry_count,
                 retry_delay=retry_delay,
                 timeout=timeout,
@@ -213,7 +211,6 @@ async def _download_with_range(
     total_size: Optional[int],
     chunk_size: int,
     resume: bool,
-    no_range: bool = False,
     retry_count: int,
     retry_delay: int,
     timeout: int,
@@ -255,7 +252,7 @@ async def _download_with_range(
             # Build Range header for resume
             headers = {}
             request_range = False
-            if resume and not no_range and downloaded > 0 and not range_not_supported:
+            if resume and total_size is not None and downloaded > 0 and not range_not_supported:
                 end_byte = downloaded + chunk_size - 1
                 if total_size:
                     end_byte = min(end_byte, total_size - 1)
@@ -410,20 +407,30 @@ async def _download_with_range(
     return downloaded
 
 
-async def _get_file_size(session: aiohttp.ClientSession, url: str) -> Optional[int]:
-    """Get file size via HEAD request."""
+async def _get_file_info(session: aiohttp.ClientSession, url: str) -> tuple:
+    """Get file size and Range support via HEAD request.
+
+    Returns:
+        (total_size, accept_ranges) where:
+        - total_size: int or None (Content-Length)
+        - accept_ranges: bool (server sent Accept-Ranges: bytes)
+    """
     try:
         async with session.head(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
             if response.status == 200:
                 content_length = response.headers.get("Content-Length")
+                total_size = None
                 if content_length:
                     try:
-                        return int(content_length)
+                        total_size = int(content_length)
                     except ValueError:
                         pass
-            return None
+                ar = response.headers.get("Accept-Ranges", "")
+                accept_ranges = (ar.lower() == "bytes")
+                return total_size, accept_ranges
+            return None, False
     except Exception:
-        return None
+        return None, False
 
 
 def format_speed(bytes_per_sec: float) -> str:

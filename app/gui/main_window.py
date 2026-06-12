@@ -127,8 +127,6 @@ from app.gui.i18n import (
 class MainWindow(QMainWindow):
     """EmbyD main application window."""
 
-    # Minimum interval between progress UI updates per task (seconds)
-    _PROGRESS_UI_THROTTLE = 0.3
 
     def __init__(self, config_path: Optional[str] = None):
         super().__init__()
@@ -157,8 +155,9 @@ class MainWindow(QMainWindow):
         # Series Browser search results cache
         self._series_search_results: list[dict] = []
 
-        # ---- Progress throttle: task_id -> last UI update timestamp ----
-        self._progress_last_ui_update: dict[str, float] = {}
+        # ---- Progress store: task_id -> (downloaded, total, speed) ----
+        self._progress_store: dict[str, tuple] = {}
+        self._progress_last_fast_update: dict[str, float] = {}
 
         # ---- Heartbeat timer for GUI responsiveness diagnostics ----
         self._heartbeat_timer = QTimer(self)
@@ -166,6 +165,12 @@ class MainWindow(QMainWindow):
         self._heartbeat_timer.timeout.connect(self._on_heartbeat)
         self._heartbeat_count = 0
         self._heartbeat_timer.start()
+
+        # ---- Progress timer: update UI every 5 seconds ----
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(5000)
+        self._progress_timer.timeout.connect(self._on_progress_timer)
+        self._progress_timer.start()
 
         self._init_ui()
         self._connect_controller_signals()
@@ -181,7 +186,7 @@ class MainWindow(QMainWindow):
             if t.status in ("downloading", "preparing"):
                 update_task(t.task_id, status="failed",
                            error_message="Interrupted: GUI was closed during download")
-                self._progress_log_count[t.task_id] = 0
+                pass
 
         # Start the backend process (independent download worker)
         # DownloadController handles threading - no backend process needed
@@ -264,66 +269,58 @@ class MainWindow(QMainWindow):
         
 
     # ---- Progress throttle counter for log reporting ----
-    _progress_log_count: dict[str, int] = {}
 
     def _on_controller_progress(self, task_id: str, downloaded: object, total: object, speed: float):
-        """Update tasks table row from download progress.  Log summary periodically.
-        No progress bar or speed label (removed to eliminate GUI freeze source).
-        """
-        # Throttling still lives in _on_controller_progress_inner via _PROGRESS_UI_THROTTLE.
-        with timed_step("GUI progress update", task_id=task_id):
-            self._on_controller_progress_inner(task_id, downloaded, total, speed)
-
-    def _on_controller_progress_inner(self, task_id: str, downloaded: object, total: object, speed: float):
+        """Store latest progress. Fast update every ~1s, plus 5s timer flush."""
+        self._progress_store[task_id] = (downloaded, total, speed)
         now = _time.time()
-        last = self._progress_last_ui_update.get(task_id, 0)
-        if now - last < self._PROGRESS_UI_THROTTLE:
-            return
-        self._progress_last_ui_update[task_id] = now
+        last = self._progress_last_fast_update.get(task_id, 0)
+        if now - last >= 1.0:
+            self._progress_last_fast_update[task_id] = now
+            dl = int(downloaded) if downloaded is not None else 0
+            tot = int(total) if total is not None else None
+            self._update_task_row(task_id, dl, tot, speed)
 
-        dl = int(downloaded) if downloaded is not None else 0
-        tot = int(total) if total is not None else None
-
-        # Log progress summary every ~10 updates (~3 seconds)
-        cnt = self._progress_log_count.get(task_id, 0) + 1
-        self._progress_log_count[task_id] = cnt
-        if cnt % 10 == 0:
-            dl_str = format_bytes(dl)
-            tot_str = format_bytes(tot) if tot else "?"
-            spd_str = format_speed_gui(speed) if speed > 0 else "--"
-            self.log.append_log("INFO", f"[{task_id}] {dl_str} / {tot_str}  {spd_str}")
-
-        # Update the corresponding task row in Tasks table
-        self._update_task_row(task_id, dl, tot, speed)
+    def _on_progress_timer(self):
+        """Periodic (5s) progress UI update for all active tasks."""
+        from app.utils.formatting import format_bytes, format_speed_gui, format_eta, format_progress_pct
+        from app.downloader.task_store import get_task as db_get_task
+        for task_id in list(self._progress_store.keys()):
+            entry = self._progress_store.pop(task_id, None)
+            if entry is None:
+                continue
+            downloaded, total, speed = entry
+            dl = int(downloaded) if downloaded is not None else 0
+            tot = int(total) if total is not None else None
+            self._update_task_row(task_id, dl, tot, speed)
+            # Also write latest progress to DB for survival across restarts
+            if total is not None and total > 0:
+                from app.downloader.task_store import update_task as db_update_task
+                db_update_task(task_id, downloaded_bytes=dl, total_bytes=tot)
 
     def _on_controller_status_changed(self, task_id: str, status: str):
         """Refresh tasks table when a task status changes."""
-        self._progress_last_ui_update.pop(task_id, None)
-        self._progress_log_count.pop(task_id, None)
+        self._progress_store.pop(task_id, None)
         self._refresh_tasks()
 
     def _on_controller_error(self, task_id: str, message: str):
         """Show error from download controller."""
-        self._progress_last_ui_update.pop(task_id, None)
-        self._progress_log_count.pop(task_id, None)
+        self._progress_store.pop(task_id, None)
         self._refresh_tasks()
 
     def _on_controller_finished(self, task_id: str, output_path: str):
         """Task completed."""
-        self._progress_last_ui_update.pop(task_id, None)
-        self._progress_log_count.pop(task_id, None)
+        self._progress_store.pop(task_id, None)
         self._refresh_tasks()
 
     def _on_controller_paused(self, task_id: str):
         """Task paused."""
-        self._progress_last_ui_update.pop(task_id, None)
-        self._progress_log_count.pop(task_id, None)
+        self._progress_store.pop(task_id, None)
         self._refresh_tasks()
 
     def _on_controller_cancelled(self, task_id: str):
         """Task cancelled."""
-        self._progress_last_ui_update.pop(task_id, None)
-        self._progress_log_count.pop(task_id, None)
+        self._progress_store.pop(task_id, None)
         self._refresh_tasks()
 
     # ---- Worker helpers ----
@@ -1934,8 +1931,12 @@ class MainWindow(QMainWindow):
     def _update_task_row(self, task_id: str, downloaded: int, total: int | None, speed: float):
         """Update a single task row with latest progress."""
         row = self._task_row_index.get(task_id)
-        if row is None:
-            return
+        if row is None or row < 0 or row >= self.task_table.rowCount():
+            # Row index stale - rebuild table and retry
+            self._refresh_tasks()
+            row = self._task_row_index.get(task_id)
+            if row is None:
+                return
 
         pct = format_progress_pct(downloaded, total)
         dl_str = format_bytes(downloaded)

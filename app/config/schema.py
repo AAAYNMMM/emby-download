@@ -27,7 +27,7 @@ class EmbyConfig:
     retry_count: int = 3
     retry_delay_seconds: int = 5
     timeout_seconds: int = 600  # 10 minutes (was 30s, too short for large files)
-    max_concurrent_downloads: int = 1
+    max_concurrent_downloads: int = 5
 
     # Naming
     filename_template: str = "{Name} ({Year})"
